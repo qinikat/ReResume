@@ -1,0 +1,25 @@
+{
+  "name": "reresume",
+  "version": "1.0.0",
+  "description": "**以上是源码作者的制作感想**",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-cron": "^3.0.3",
+    "puppeteer": "^24.7.2",
+    "pkg-fetch": "^3.5.2"
+  },
+  "bin": "index.js",
+  "pkg": {
+    "assets": [
+      "config.json",
+      "resumeEditor.js"
+    ],
+    "outputPath": "executables"
+  }
+}
