@@ -1,5 +1,108 @@
 // resumeActions.js
 
+
+/**
+ * 从下拉框中选择一个选项。
+ * 这个函数会尝试处理原生的 <select> 元素和常见的模拟下拉框。
+ *
+ * @param {import('puppeteer').Page} page Puppeteer 页面对象。
+ * @param {import('puppeteer').ElementHandle} dropdownElement 下拉框的 ElementHandle。
+ * @param {string} optionText 要选择的选项的文本。
+ * @param {number} delay 每次操作后的延迟。
+ * @returns {Promise<boolean>} 如果成功选择则为 true，否则为 false。
+ */
+async function selectDropdownOption(page, dropdownElement, optionText, delay = 200) {
+    if (!dropdownElement) {
+        console.error('[下拉选择] 无效的下拉框元素。');
+        return false;
+    }
+
+    const xpath = await getXPathForElement(dropdownElement);
+    console.log(`[下拉选择] 尝试在下拉框 ${xpath} 中选择选项："${optionText}"`);
+
+    // 尝试处理原生的 <select> 元素
+    const isSelectTag = await dropdownElement.evaluate(el => el.tagName === 'SELECT');
+    if (isSelectTag) {
+        try {
+            await dropdownElement.select(optionText); // Puppeteer 的原生 select 方法
+            console.log(`[下拉选择] 成功通过原生 select 方法选择："${optionText}"`);
+            await new Promise(r => setTimeout(r, delay));
+            return true;
+        } catch (e) {
+            console.warn(`[下拉选择] 原生 select 方法失败，尝试模拟点击: ${e.message}`);
+            // 继续尝试模拟点击
+        }
+    }
+
+    // 尝试处理模拟下拉框 (例如 Ant Design, Element UI, 或自定义的 div/span 模拟)
+    try {
+        // 1. 点击下拉框本身以展开选项列表
+        const box = await dropdownElement.boundingBox();
+        if (!box || box.width === 0 || box.height === 0) {
+            console.error(`[下拉选择] 下拉框元素 ${xpath} 不可见或无 boundingBox。`);
+            return false;
+        }
+        await dropdownElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise(r => setTimeout(r, delay / 2));
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        console.log(`[下拉选择] 已点击下拉框以展开选项。`);
+        await new Promise(r => setTimeout(r, delay)); // 等待选项列表展开
+
+        // 2. 查找并点击包含目标文本的选项
+        const optionSelectors = [
+            `span[title*="${optionText}" i]`,
+            `div[title*="${optionText}" i]`,
+            `li[role="option"]:has-text("${optionText}" i)`,
+            `div[role="option"]:has-text("${optionText}" i)`,
+            `div.el-select-dropdown__item:has-text("${optionText}" i)`,
+            `div[class*="option"]:has-text("${optionText}" i)`,
+            `li:has-text("${optionText}" i)`,
+            `div:has-text("${optionText}" i)`,
+        ];
+
+        let selectedOption = null;
+        for (const selector of optionSelectors) {
+            const options = await page.$$(selector);
+            for (const optionEl of options) {
+                const textContent = await optionEl.evaluate(el => el.innerText || el.textContent);
+                if (textContent && textContent.trim().includes(optionText) && textContent.trim().length <= optionText.length + 5) {
+                    const optionBox = await optionEl.boundingBox();
+                    if (optionBox && optionBox.width > 0 && optionBox.height > 0 && optionBox.y >= 0 && optionBox.y <= page.viewport().height) {
+                        selectedOption = optionEl;
+                        break;
+                    }
+                }
+                await optionEl.dispose();
+            }
+            if (selectedOption) break;
+        }
+
+        if (selectedOption) {
+            const optionBox = await selectedOption.boundingBox();
+            await selectedOption.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            await new Promise(r => setTimeout(r, delay / 2));
+            await page.mouse.click(optionBox.x + optionBox.width / 2, optionBox.y + optionBox.height / 2);
+            console.log(`[下拉选择] 成功通过模拟点击选择："${optionText}"`);
+            await new Promise(r => setTimeout(r, delay / 2)); // 稍微等待点击生效
+
+            // *** 新增：模拟按下回车键以确认选择或关闭下拉框 ***
+            await page.keyboard.press('Enter');
+            console.log(`[下拉选择] 已模拟按下 'Enter' 键。`);
+            await new Promise(r => setTimeout(r, delay / 2)); // 等待回车键操作生效
+
+            await selectedOption.dispose();
+            return true;
+        } else {
+            console.warn(`[下拉选择] 未能在展开的下拉选项中找到文本为 "${optionText}" 的选项。`);
+            return false;
+        }
+
+    } catch (e) {
+        console.error(`[下拉选择] 选择下拉框选项时发生错误: ${e.message}`);
+        return false;
+    }
+}
+
 /**
  * 获取元素的 XPath。用于调试日志。
  * @param {import('puppeteer').ElementHandle|import('puppeteer').Page} elementHandle Puppeteer ElementHandle 或 Page 对象。
@@ -549,6 +652,10 @@ async function fillInputField(page, inputElement, value, delay = 200) {
     console.log(`[填写字段] 已输入新内容: "${value}"。`);
     await new Promise(r => setTimeout(r, delay));
 
+    await page.keyboard.press('Enter');
+    console.log('[填写字段] 已按 Enter 键确认输入框。');
+    await new Promise(r => setTimeout(r, delay));
+
     await page.keyboard.press('Tab');
     console.log('[填写字段] 已按 Tab 键离开输入框。');
     await new Promise(r => setTimeout(r, delay));
@@ -574,4 +681,5 @@ module.exports = {
     findInputFieldByLabel,
     fillInputField,
     modifyText,
+    selectDropdownOption
 };

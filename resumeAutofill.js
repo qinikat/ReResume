@@ -10,19 +10,36 @@ const {
 } = require('./resumeActions'); // 确保路径正确
 
 /**
- * 尝试填写一个表单字段。
+ * 尝试填写一个表单字段，现在支持多个可能的标签文本。
+ * 它将按顺序尝试使用每个提供的标签文本查找输入字段，直到找到匹配项，或所有选项都用尽。
+ *
  * @param {import('puppeteer').Page} page Puppeteer 页面对象。
- * @param {string} labelText 字段的标签文本。
+ * @param {string|string[]} labelTexts 字段的标签文本。可以是单个字符串或字符串数组。
  * @param {string} value 要填入的值。
  * @param {number} delay 填写操作后的延迟。
  * @returns {Promise<boolean>} 如果字段成功找到并填写则返回 true，否则返回 false。
  */
-async function attemptFillField(page, labelText, value, delay) { // 移除 formContainerElement 参数
-    console.log(`[字段填写] 尝试填写"${labelText}"字段...`); // 日志也相应修改
-    // findInputFieldByLabel 现在是全局查找，不再需要上下文
-    const inputElement = await findInputFieldByLabel(page, labelText);
+async function attemptFillField(page, labelTexts, value, delay) {
+    // 确保 labelTexts 是一个数组，以便保持迭代的一致性
+    const labelsToTry = Array.isArray(labelTexts) ? labelTexts : [labelTexts];
+
+    console.log(`[字段填写] 尝试填写标签为："${labelsToTry.join('", "')}" 的字段...`);
+
+    let inputElement = null;
+    let foundLabel = null;
+
+    // 遍历提供的标签，直到找到一个输入字段
+    for (const label of labelsToTry) {
+        inputElement = await findInputFieldByLabel(page, label);
+        if (inputElement) {
+            foundLabel = label;
+            console.log(`[字段填写] 找到标签为 "${foundLabel}" 的输入框。`);
+            break; // 找到了，退出循环
+        }
+    }
+
     if (!inputElement) {
-        console.warn(`[字段填写] 未找到"${labelText}"输入框，跳过此字段。`);
+        console.warn(`[字段填写] 未找到任何符合提供标签的输入框："${labelsToTry.join('", "')}"，跳过此字段。`);
         return false;
     }
 
@@ -30,10 +47,54 @@ async function attemptFillField(page, labelText, value, delay) { // 移除 formC
     await inputElement.dispose(); // 及时释放句柄
 
     if (!filled) {
-        console.warn(`[字段填写] 未能成功填写"${labelText}"。`);
+        console.warn(`[字段填写] 未能成功填写标签为 "${foundLabel}" 的字段。`);
         return false;
     }
-    console.log(`[字段填写] 成功填写"${labelText}"。`);
+    console.log(`[字段填写] 成功填写标签为 "${foundLabel}" 的字段。`);
+    return true;
+}
+
+
+/**
+ * 封装填充“个人信息”的完整流程。
+ * @param {import('puppeteer').Page} page Puppeteer 页面对象。
+ * @param {number} delay 通用操作延迟。
+ * @returns {Promise<boolean>} 如果个人信息模块主要步骤成功则返回 true，否则返回 false。
+ */
+async function fillPersonalInfo(page, delay) {
+    console.log('\n--- 开始填充个人信息 ---');
+
+    const personalInfoTitle = await findSectionTitle(page, '个人信息', delay);
+    if (!personalInfoTitle) {
+        console.warn('[个人信息] 未找到“个人信息”区域标题，尝试查找“基本信息”...');
+        const basicInfoTitle = await findSectionTitle(page, '基本信息', delay);
+        if (!basicInfoTitle) {
+            console.error('[个人信息] 未找到个人信息或基本信息标题，跳过此模块。');
+            return false;
+        }
+        await basicInfoTitle.dispose();
+    } else {
+        await personalInfoTitle.dispose();
+    }
+
+    console.log('[个人信息] 假设个人信息表单已加载，开始填写字段。');
+
+    // 填写姓名
+    await attemptFillField(page, ['姓名', '你的姓名'], '张三', delay / 2);
+
+
+    await attemptFillField(page, ['性别', '你的性别'], '男', delay / 2);
+    
+    // 填写邮箱
+    await attemptFillField(page, ['邮箱', '电子邮箱', 'Email'], 'zhangsan@example.com', delay / 2);
+
+    // 填写最高学历
+    await attemptFillField(page, ['最高学历', '学历'], '本科', delay / 2);
+
+    // 填写毕业学校
+    await attemptFillField(page, ['毕业学校', '学校'], '顶尖大学', delay / 2);
+
+    console.log('--- 个人信息填充结束 ---\n');
     return true;
 }
 
@@ -140,6 +201,12 @@ async function autofillResume(page) {
     console.log('--- 开始自动填写简历流程 ---');
     const delay = 1000; // 通用操作延迟
 
+        // 新增：填充个人信息
+    const personalInfoFilled = await fillPersonalInfo(page, delay);
+    if (!personalInfoFilled) {
+        console.warn('[主流程] 个人信息填充遇到问题，但将尝试继续其他模块。');
+    }
+
     // 尝试填充项目经历，即使失败也继续尝试其他模块
     const projectFilled = await fillProjectExperience(page, delay);
     if (!projectFilled) {
@@ -152,9 +219,12 @@ async function autofillResume(page) {
         console.warn('[主流程] 实习经历填充遇到问题，但将尝试继续其他模块。');
     }
 
+
+
     console.log('--- 自动填写简历流程完成 ---');
     return true; // 表示整个流程已尝试执行
 }
+
 
 // 暴露接口
 module.exports = {
