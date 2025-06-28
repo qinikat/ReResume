@@ -3,7 +3,7 @@
   "editTime": "5 10 * * *",
   "chromePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "urls": [
-  
+    "https://www.zhipin.com/web/geek/jobs",
     "https://app.mokahr.com/campus-recruitment/eebbk/37594#/job/64bbe438-0f18-4532-b286-a36fa43d6f11/apply?applyFormId=173614",
     "https://anker-in.jobs.feishu.cn/campushirecn/resume/7514575348114229523/apply",
     "https://wecruit.hotjob.cn/SU64893571bef57c16d356b99e/pb/resumeOperation.html?tid=65aa1fa91eb80519df8b9bed&recruitType=12&pid=685a67c0d360b05cf82e061c&qTid=610d6e822f9d24229eef8275&lang=1#123"

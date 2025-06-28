@@ -238,27 +238,43 @@ async function getAllClickableElementsWithKeywords(page, keywords) {
  * @param {number} delay 滚动后的延迟时间。
  * @returns {Promise<import('puppeteer').ElementHandle|null>} 找到的标题元素句柄，或 null。
  */
-async function findSectionTitle(page, titleText, delay = 500) {
-    console.log(`[查找标题] 尝试找到 "${titleText}" 标题...`);
+async function findSectionTitle(page, titleTexts, delay = 500) {
+    // 确保 titleTexts 是一个数组，以便统一处理
+    const labelsToTry = Array.isArray(titleTexts) ? titleTexts : [titleTexts];
+    console.log(`[查找标题] 尝试找到标题："${labelsToTry.join('", "')}" ...`);
+
     const possibleSectionElements = await page.$$('h1, h2, h3, h4, h5, h6, div, span, p');
+    let foundElement = null; // 用于存储最终找到的元素
+
     for (const el of possibleSectionElements) {
-        const text = await page.evaluate(node => node.innerText || node.textContent || '', el);
-        if (text.includes(titleText) && text.trim().length <= titleText.length + 10) {
-            const box = await el.boundingBox();
-            if (box && box.width > 0 && box.height > 0) {
-                console.log(`[查找标题] 找到 "${titleText}" 标题：${await getXPathForElement(el)}`);
-                await el.scrollIntoView();
-                await new Promise(r => setTimeout(r, delay));
-                // 找到了，释放其他未使用的句柄
-                for (const otherEl of possibleSectionElements) {
-                    if (otherEl !== el) await otherEl.dispose();
+        const textContent = await page.evaluate(node => node.innerText || node.textContent || '', el);
+        // 遍历所有可能的标题文本
+        for (const title of labelsToTry) {
+            // 使用 includes 进行宽松匹配，并检查长度，防止匹配到过长的无关文本
+            if (textContent.includes(title) && textContent.trim().length <= title.length + 20) { // 增加匹配长度的容忍度
+                const box = await el.boundingBox();
+                if (box && box.width > 0 && box.height > 0) {
+                    console.log(`[查找标题] 找到 "${title}" 标题：${await getXPathForElement(el)}`);
+                    await el.scrollIntoView();
+                    await new Promise(r => setTimeout(r, delay));
+                    foundElement = el; // 找到了，保存当前元素
+                    break; // 跳出内部循环，因为已找到匹配的标题
                 }
-                return el;
             }
         }
-        await el.dispose(); // 如果不匹配，释放当前句柄
+        if (foundElement) {
+            // 如果已经找到元素，就不再处理其他 possibleSectionElements
+            // 释放所有其他未使用的句柄
+            for (const otherEl of possibleSectionElements) {
+                if (otherEl !== foundElement) await otherEl.dispose();
+            }
+            return foundElement; // 返回找到的元素
+        } else {
+            await el.dispose(); // 如果当前元素不匹配任何标题，则释放句柄
+        }
     }
-    console.error(`[查找标题] 未找到清晰的 "${titleText}" 标题或其不可见。`);
+
+    console.error(`[查找标题] 未找到任何符合标题："${labelsToTry.join('", "')}" 的清晰标题或其不可见。`);
     return null;
 }
 
@@ -461,18 +477,22 @@ async function determineFormContainer(page, firstFieldLabel, timeout = 5000, del
  * @param {string} labelText 输入字段的标签文本（例如，“公司名称”）。
  * @returns {Promise<import('puppeteer').ElementHandle|null>} 找到的输入框或文本区域的 ElementHandle，或 null。
  */
-async function findInputFieldByLabel(page, labelText) {
-    console.log(`[查找字段] 正在全页面查找 "${labelText}" 字段的输入框...`);
+async function findInputFieldByLabel(page, labelText, containerElement = null) {
+    console.log(`[查找字段] 正在 ${containerElement ? '容器内' : '全页面'} 查找 "${labelText}" 字段的输入框...`);
 
     let bestMatchInput = null;
-    let maxCommonPathDepth = -1; // 用于衡量 XPath 路径相似度
-    let minDistance = Infinity; // 用于衡量几何距离
+    let maxCommonPathDepth = -1;
+    let minDistance = Infinity;
+    let bestMatchInputBox = null;
+
+    // 如果提供了容器元素，则在此容器内查找，否则在整个页面查找
+    const searchScope = containerElement || page;
 
     // 1. 查找所有可见的标签文本元素 (包括 span)
     const potentialLabelElements = [];
     const labelSelectors = ['label', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
     for (const selector of labelSelectors) {
-        const elements = await page.$$(selector); // 在整个页面查找
+        const elements = await searchScope.$$(selector); // 在容器内或页面查找
         for (const el of elements) {
             const text = await el.evaluate(node => node.innerText || node.textContent || '');
             if (text.includes(labelText) && text.trim().length <= labelText.length + 20) {
@@ -488,11 +508,11 @@ async function findInputFieldByLabel(page, labelText) {
         }
     }
 
-    // 2. 查找所有可见的输入框和文本区域 (在整个页面)
+    // 2. 查找所有可见的输入框和文本区域 (在容器内或整个页面)
     const potentialInputElements = [];
     const inputSelectors = ['input:not([type="hidden"])', 'textarea'];
     for (const selector of inputSelectors) {
-        const elements = await page.$$(selector); // 在整个页面查找
+        const elements = await searchScope.$$(selector); // 在容器内或页面查找
         for (const el of elements) {
             const box = await el.boundingBox();
             if (box && box.width > 0 && box.height > 0) {
@@ -505,12 +525,15 @@ async function findInputFieldByLabel(page, labelText) {
 
     // 优先级1: 如果没有找到标签元素，尝试通过 placeholder 查找 (高优先级)
     if (potentialLabelElements.length === 0) {
-        console.log(`[查找字段] 未找到标签文本 "${labelText}"，尝试通过 placeholder 查找...`);
-        const inputWithPlaceholder = await page.$(`input[placeholder*="${labelText}" i], textarea[placeholder*="${labelText}" i]`);
+        console.log(`[查找字段] 在 ${containerElement ? '容器内' : '全页面'} 未找到标签文本 "${labelText}"，尝试通过 placeholder 查找...`);
+        // 这里也需要考虑在容器内查找
+        const placeholderSelector = `input[placeholder*="${labelText}" i], textarea[placeholder*="${labelText}" i]`;
+        const inputWithPlaceholder = await (containerElement ? containerElement.$(placeholderSelector) : page.$(placeholderSelector));
+
         if (inputWithPlaceholder) {
             const box = await inputWithPlaceholder.boundingBox();
             if (box && box.width > 0 && box.height > 0) {
-                console.log(`[查找字段] 通过 placeholder 找到输入框：${await getXPathForElement(inputWithPlaceholder)}`);
+                console.log(`[查找字段] 通过 placeholder 在 ${containerElement ? '容器内' : '全页面'} 找到输入框：${await getXPathForElement(inputWithPlaceholder)}`);
                 // 释放所有之前获取的句柄
                 potentialLabelElements.forEach(h => h.dispose());
                 potentialInputElements.forEach(h => h.dispose());
@@ -518,7 +541,10 @@ async function findInputFieldByLabel(page, labelText) {
             }
             await inputWithPlaceholder.dispose();
         }
-        console.error(`[查找字段] 未能在页面中找到 "${labelText}" 关联的输入框。`);
+        // 如果是在容器内查找，但没找到，可以不用打印错误，因为可能这个字段不在当前容器
+        if (!containerElement) {
+             console.error(`[查找字段] 未能在页面中找到 "${labelText}" 关联的输入框。`);
+        }
         return null;
     }
 
@@ -557,26 +583,43 @@ async function findInputFieldByLabel(page, labelText) {
             const currentCommonPathDepth = lcaHandle ? await getElementDepth(lcaHandle) : 0;
             if (lcaHandle) await lcaHandle.dispose();
 
+            // 只有当 LCA 在容器内部时才考虑，如果提供了容器
+            if (containerElement && !(await containerElement.evaluate((container, el) => container.contains(el), containerElement, lcaHandle || labelEl))) {
+                // 如果LCA不在容器内，或者标签本身不在容器内，则跳过
+                continue;
+            }
+
+
             // 计算几何距离
             const distance = Math.sqrt(
                 Math.pow(inputCenterX - labelCenterX, 2) +
                 Math.pow(inputCenterY - labelCenterY, 2)
             );
 
-            // 过滤：输入框不能在标签的上方太远
+            // 过滤：输入框不能在标签的上方太远（通常输入框在标签的右边或下方）
             if (inputBox.bottom < labelBox.top - 10) {
                 continue;
             }
 
+            // --- 核心优化：偏向于选择第一个输入框 ---
             // 选择共同路径最长，距离最近的按钮
             if (currentCommonPathDepth > maxCommonPathDepth) {
                 maxCommonPathDepth = currentCommonPathDepth;
                 minDistance = distance;
                 bestMatchInput = inputEl;
+                bestMatchInputBox = inputBox; // 存储 boundingBox
             } else if (currentCommonPathDepth === maxCommonPathDepth) {
                 if (distance < minDistance) {
                     minDistance = distance;
                     bestMatchInput = inputEl;
+                    bestMatchInputBox = inputBox; // 存储 boundingBox
+                } else if (distance === minDistance) {
+                    // 如果共同路径和距离都相同，选择 X 坐标最小的（最靠左的）
+                    // 这对于复合字段（如“年”和“月”）通常能选到第一个
+                    if (bestMatchInputBox && inputBox.x < bestMatchInputBox.x) {
+                        bestMatchInput = inputEl;
+                        bestMatchInputBox = inputBox;
+                    }
                 }
             }
         }
@@ -594,7 +637,9 @@ async function findInputFieldByLabel(page, labelText) {
         }
     }
 
-    console.error(`[查找字段] 未能在页面中找到 "${labelText}" 关联的输入框。`);
+    if (!containerElement) { // 只有在全页面查找时才报错
+        console.error(`[查找字段] 未能在页面中找到 "${labelText}" 关联的输入框。`);
+    }
     return null;
 }
 
